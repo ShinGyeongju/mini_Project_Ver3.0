@@ -1,0 +1,199 @@
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Data;
+using System.Drawing;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+using System.IO;
+using System.Drawing.Imaging;
+using MySql.Data.MySqlClient;
+
+namespace _028_01_칼라영상처리2_DB연동_
+{
+    public partial class dbForm : Form
+    {
+        public byte[,,] outImage = null;
+        public int outH = 0, outW = 0;
+        const int RGB = 3, RR = 0, GG = 1, BB = 2;
+        public String db_Server = "192.168.56.101";
+        public String fileName, f_name, f_extname;
+        MySqlConnection mscn;
+        MySqlCommand mscm;
+        MySqlDataReader msdr;
+
+        public dbForm(String fileName)
+        {
+            InitializeComponent();
+
+            if (fileName != null) 
+            {
+                this.fileName = fileName;
+                String[] tmp1 = fileName.Split('\\');
+                String[] tmp2 = tmp1[tmp1.Length - 1].Split('.');
+                this.f_extname = tmp2[1];
+                textBox1.Text = tmp2[0];
+            }
+        }
+        private void dbForm_Load(object sender, EventArgs e)
+        {
+            mscn = new MySqlConnection("Server=" + db_Server + ";Database=blob_db;Uid=winuser;Pwd=p@ssw0rd;Charset=UTF8");
+            mscn.Open();
+            mscm = new MySqlCommand("", mscn);
+
+            select_db();
+        }
+        private void dbForm_FormClosed(object sender, FormClosedEventArgs e)
+        {
+            mscn.Close();
+        }
+        private void bt_upload_Click(object sender, EventArgs e)
+        {
+            int f_id = 0;
+
+            if (fileName != null)
+            {
+                if (textBox1.Text == "")
+                {
+                    MessageBox.Show("# [실패] 파일이름을 입력해주세요.");
+                    return;
+                }
+
+                msdr.Close();
+                mscm.CommandText = "SELECT f_name FROM blob_tb;";
+                msdr = mscm.ExecuteReader();
+                while (msdr.Read())
+                {
+                    if(textBox1.Text.Equals(msdr["f_name"])) 
+                    {
+                        MessageBox.Show("# [실패] 이미 사용중인 이름입니다.");
+                        return;
+                    }
+                }
+                msdr.Close();
+
+                mscm.CommandText = "SELECT max(f_id) AS 'f_id' FROM blob_tb;";
+                msdr = mscm.ExecuteReader();
+                msdr.Read();
+
+                if (!(msdr["f_id"] is System.DBNull))
+                    f_id = (int)msdr["f_id"] + 1;
+                msdr.Close();
+
+                String tmpFileName = System.IO.Path.GetTempPath() + textBox1.Text + "." + f_extname;
+                Bitmap image = new Bitmap(outH, outW);
+                for (int i = 0; i < outH; i++)
+                {
+                    for (int k = 0; k < outW; k++)
+                    {
+                        Color c;
+                        int r, g, b;
+                        r = outImage[RR, i, k];
+                        g = outImage[GG, i, k];
+                        b = outImage[BB, i, k];
+                        c = Color.FromArgb(r, g, b);
+                        image.SetPixel(i, k, c);
+                    }
+                }
+                image.Save(tmpFileName);
+
+                fileName = tmpFileName;
+                String f_name = textBox1.Text;
+                int f_height = outH;
+                int f_width = outW;
+                long f_size = new FileInfo(fileName).Length;
+
+                FileStream fs = new FileStream(fileName, FileMode.Open, FileAccess.Read);
+                byte[] blob_data = new byte[f_size];
+                fs.Read(blob_data, 0, (int)f_size);
+                fs.Close();
+
+                image.Dispose();
+                System.IO.File.Delete(fileName);
+
+                mscm.CommandText = "INSERT INTO blob_tb VALUES (" + f_id + ", '" + f_name + "', '" + f_extname + "', " + f_size + ", " + f_width + ", " + f_height + ", @BLOB_DATA);";
+                mscm.Parameters.AddWithValue("@BLOB_DATA", blob_data);
+                try
+                {
+                    mscm.ExecuteNonQuery();
+                }
+                catch
+                {
+                    MessageBox.Show("# [실패] 업로드할 수 없습니다.");
+                    return;
+                }
+                mscm.Parameters.Clear();
+            }
+            else
+            {
+                MessageBox.Show("# [실패] 파일을 불러와주세요.");
+                return;
+            }
+            MessageBox.Show("# [성공] 업로드 되었습니다.");
+
+            select_db();
+        }
+        private void bt_download_Click(object sender, EventArgs e)
+        {
+            if(listBox1.Text == "")
+            {
+                MessageBox.Show("# [실패] 이미지를 선택해주세요.");
+                return;
+            }
+            String f_id = listBox1.Text.Split(' ')[2];
+
+            mscm.CommandText = "SELECT f_name, f_extname, f_size, f_data FROM blob_tb WHERE f_id=" + f_id + ";";
+            msdr = mscm.ExecuteReader();
+            msdr.Read();
+
+            f_name = (String)msdr["f_name"];
+            f_extname = (String)msdr["f_extname"];
+            int f_size = int.Parse(msdr["f_size"].ToString());
+
+            byte[] f_data = new byte[f_size];
+            msdr.GetBytes(msdr.GetOrdinal("f_data"), 0, f_data, 0, f_size);
+            msdr.Close();
+
+            String tmpFileName = System.IO.Path.GetTempPath() + f_name + "." + f_extname;
+
+            FileStream fs = new FileStream(tmpFileName, FileMode.OpenOrCreate, FileAccess.Write);
+            fs.Write(f_data, 0, (int)f_size);
+            fs.Close();
+
+            Bitmap bitmap = new Bitmap(tmpFileName);
+            outW = bitmap.Height;
+            outH = bitmap.Width;
+            outImage = new byte[RGB, outH, outW];
+            for (int i = 0; i < outH; i++)
+            {
+                for (int k = 0; k < outW; k++)
+                {
+                    Color c = bitmap.GetPixel(i, k);
+                    outImage[RR, i, k]= c.R;
+                    outImage[GG, i, k]= c.G;
+                    outImage[BB, i, k]= c.B;
+                }
+            }
+            bitmap.Dispose();
+            System.IO.File.Delete(tmpFileName);
+
+            MessageBox.Show("# [성공] 다운로드 되었습니다.");
+            this.DialogResult = DialogResult.OK;
+        }
+        void select_db()
+        {
+            mscm.CommandText = "SELECT * FROM blob_tb;";
+            msdr = mscm.ExecuteReader();
+
+            listBox1.Items.Clear();
+            while (msdr.Read())
+            {
+                String str = "  " + msdr["f_id"] + " \t" + msdr["f_name"] + "." + msdr["f_extname"] + "      \t\t" + msdr["f_size"] + "\t" + msdr["f_width"] + "\t" + msdr["f_height"];
+                listBox1.Items.Add(str);
+            }
+            msdr.Close();
+        }
+    }
+}
